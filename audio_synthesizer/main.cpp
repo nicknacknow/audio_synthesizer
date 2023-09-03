@@ -1,127 +1,45 @@
-#include <iostream>
-using namespace std;
+#include "synth.h"
 
-#include "noisemaker.h"
+std::vector<synth::note> vecNotes;
+std::mutex muxNotes;
 
-#define w(f) (f * 2 * PI)
+synth::instrument_harmonica instHarm;
 
-struct sEnvelopeADSR // Attack, Decay, Sustain & Release Envelope
+// thx olc :)
+typedef bool(*lambda)(synth::note const& item);
+template<class T>
+void safe_remove(T& v, lambda f)
 {
-	double dAttackTime;
-	double dDecayTime;
-	double dReleaseTime;
-
-	double dSustainAmplitude;
-	double dStartAmplitude;
-	
-	double dTriggerPressTime = 0.0; // when key is pressed
-	double dTriggerReleaseTime = 0.0; // when key is released, will be set later
-	
-	bool bNoteOn = false;
-
-	sEnvelopeADSR()
-	{
-		dAttackTime = 0.1;
-		dDecayTime = 0.2;
-		dReleaseTime = 0.1;
-
-		dSustainAmplitude = 0.8;
-		dStartAmplitude = 1.0;
-	}
-
-	// Get the correct amplitude at the requested point in time - dTime is realtime
-	double GetAmplitude(double dTime) {
-		double dAmplitude = 0.0;
-
-		if (bNoteOn) {
-			double dLifeTime = dTime - dTriggerPressTime; // time between current time and time of press
-
-			if (dLifeTime <= dAttackTime) { // lifetime of note is in attack phase - attack is the buildup of a note, so this will be the start of the sound. therefore _approach_ max amplitud
-				dAmplitude = (dLifeTime / dAttackTime) * dStartAmplitude; // dLifeTime is smaller than dAttackTime due to if condition, so this will basically be an increasing percentage towards the start amplitude specified.
-			}
-
-			if (dLifeTime > dAttackTime && dLifeTime <= (dAttackTime + dDecayTime)) { // next phase is decay - so lifetime of note should be between the end of dAttackTime (start of decay) & end of decay phase (attack time + decay time)
-				double dDecayDuration = dLifeTime - dAttackTime; // the current duration of decay
-				dAmplitude = (dDecayDuration / dDecayTime) * (dSustainAmplitude - dStartAmplitude) + dStartAmplitude; // basically lerp the amplitude. this would typically decrease the amplitude (as the subtraction is usually negative), so when added to dStartAmplitude, will reduce until decay phase is over.
-			}
-
-			if (dLifeTime > (dAttackTime + dDecayTime)) {
-				dAmplitude = dSustainAmplitude; // sustain amplitude
-			}
-		}
-		else { // note has been released - so enter release phase
-			if (dTriggerReleaseTime != 0)
-				dAmplitude = ((dTime - dTriggerReleaseTime) / dReleaseTime) * (0.0 - dSustainAmplitude) + dSustainAmplitude; // slowly reduce amplitude from sustained
-		}
-
-		if (dAmplitude <= 0.0001) dAmplitude = 0.0; // should not be negative
-
-		return dAmplitude;
-	}
-
-	void NotePressed(double dTimeOn) {
-		dTriggerPressTime = dTimeOn;
-		bNoteOn = true;
-	}
-
-	void NoteReleased(double dTimeOff) {
-		dTriggerReleaseTime = dTimeOff;
-		bNoteOn = false;
-	}
-};
-
-sEnvelopeADSR envelope;
-
-enum osc_types {
-	sine, square, noise
-};
-
-double oscillate(double dFrequency, double dTime, osc_types eType = osc_types::sine) {
-	switch (eType) {
-	case osc_types::sine:
-		return sin(w(dFrequency) * dTime);
-	case osc_types::square:
-		return sin(w(dFrequency) * dTime) > 0 ? 1 : -1;
-	case osc_types::noise:
-		return 2 * ((float)rand() / (float)RAND_MAX) - 1;
-
-	default: return 0;
-	}
+	auto n = v.begin();
+	while (n != v.end())
+		if (!f(*n))
+			n = v.erase(n);
+		else
+			++n;
 }
 
 // Function used by olcNoiseMaker to generate sound waves
 // Returns amplitude (-1.0 to +1.0) as a function of time
-
-int current_note = -1;
-
-double MakeNoise(double dTime)
+double MakeNoise(int nChannel, double dTime)
 {
+	std::unique_lock<mutex> lm(muxNotes);
+	double dMixedOutput = 0.0;
 
-	double dOutput = envelope.GetAmplitude(dTime);
-	double test = 0;
+	for (auto& n : vecNotes) {
+		bool bNoteFinished = false;
+		double dSound = 0;
+		if (n.channel == 1)
+			dSound = instHarm.sound(dTime, n, bNoteFinished) * 0.5;
+		dMixedOutput += dSound;
 
-	if (current_note == 0) {
-		test +=
-			(
-				+0.1 * oscillate(220, dTime, osc_types::square)
-				+ 1 * oscillate(50, dTime, osc_types::sine)
-				+ 1 * oscillate(25, dTime, osc_types::sine)
-				+ 0.01 * oscillate(500, dTime, osc_types::noise)
-				);
-	}
-	if (current_note == 1) {
-		test +=
-			(
-				+0.1 * oscillate(140, dTime, osc_types::square)
-				+ 1 * oscillate(50, dTime, osc_types::sine)
-				+ 1 * oscillate(25, dTime, osc_types::sine)
-				//+ 0.01 * oscillate(500, dTime, osc_types::noise)
-				);
+		if (bNoteFinished && n.released > n.pressed)
+			n.active = false;
 	}
 
-	dOutput *= test;
+	// wow ! modern c++ overload!! !!
+	safe_remove<std::vector<synth::note>>(vecNotes, [](synth::note const& item) {return item.active; });
 
-	return dOutput * 0.2; // master volume
+	return dMixedOutput * 0.2;
 }
 
 int main() {
@@ -138,33 +56,42 @@ int main() {
 	// Link noise function with sound machine
 	sound.SetUserFunction(MakeNoise);
 
-	bool prest = false;
-
-	auto function_name = [&](int note) {
-			printf("presed\n");
-			current_note = note;
-			envelope.NotePressed(sound.GetTime());
-	};
-
 	while (true) {
-		prest = false;
 		for (int i = 0; i < 2; i++) {
-			if (GetAsyncKeyState((unsigned char)("AS"[i])) & 0x8000) {
-				if (current_note == -1) {
-					function_name(i);
-					current_note = i;
+			short nKeyState = GetAsyncKeyState((unsigned char)("AS"[i]));
+			double dTimeNow = sound.GetTime();
+
+			muxNotes.lock();
+			auto noteFound = find_if(vecNotes.begin(), vecNotes.end(), [&i](synth::note const& item) { return item.id == i; });
+			if (noteFound == vecNotes.end()) { // note not found in vector
+				if (nKeyState & 0x8000) {
+					// create note
+					synth::note n;
+					n.id = i;
+					n.pressed = dTimeNow;
+					n.channel = 1;
+					n.active = true;
+
+					// add note to vector
+					vecNotes.emplace_back(n);
 				}
-				prest = true;
 			}
-		}
-		if (!prest) {
-			if (current_note != -1) {
-				printf("relesed\n");
-				envelope.NoteReleased(sound.GetTime());
-				prest = false;
-				current_note = -1;
+			else { // note is in vector
+				if (nKeyState & 0x8000) { // key is being held
+					if (noteFound->released > noteFound->pressed) { // key has been pressed again during release phase
+						noteFound->pressed = dTimeNow;
+						noteFound->active = true;
+					}
+				}
+				else { // key has been released, so switch off
+					if (noteFound->released < noteFound->pressed)
+						noteFound->released = dTimeNow;
+				}
 			}
+			muxNotes.unlock();
 		}
+
+		wcout << "\rNotes: " << vecNotes.size() << "    ";
 	}
 
 
@@ -180,4 +107,7 @@ to-do notes:
 	* low filter pass etc etc
 	* in getamplitude function things are done rather linearly - could implement a way to reduce things like oscillator?
 
+
+
+	* make an echo thingy... should be simple
 */
