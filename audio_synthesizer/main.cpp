@@ -37,33 +37,20 @@ void safe_remove(T& v, lambda f)
 	0.2, 0.4, -1.6, 0.4, 0.2    // Second high-pass filter
 };*/
 
-double cutoffFreq = 100.0; // Customize as needed
-double prev_cutoffFreq = cutoffFreq;
-
-double filterAlpha = 2.0 * PI * cutoffFreq / 44100; // Calculate filterAlpha
-
-std::vector<double> filterCoeff = {
-	-sin(filterAlpha), -sin(2.0 * filterAlpha), 1.0 - cos(2.0 * filterAlpha), -sin(2.0 * filterAlpha), -sin(filterAlpha)
-};
-
-// Filter state variables
-std::vector<double> filterState(filterCoeff.size(), 0.0);
-
 // Function used by olcNoiseMaker to generate sound waves
 // Returns amplitude (-1.0 to +1.0) as a function of time
+	double cutoffFreq = 100.0;  // Adjust this cutoff frequency as needed
 double MakeNoise(int nChannel, double dTime)
 {
 	std::unique_lock<mutex> lm(muxNotes);
 	double dMixedOutput = 0.0;
 
-	if (cutoffFreq != prev_cutoffFreq) {
-		filterAlpha = 2.0 * PI * cutoffFreq / 44100; // Calculate filterAlpha
+	// Filter parameters
+	double RC = 1.0 / (2.0 * PI * cutoffFreq);
+	double dt = 1.0 / 44100.0;  // Sample rate
+	double alpha = RC / (RC + dt);
 
-		filterCoeff = {
-			-sin(filterAlpha), -sin(2.0 * filterAlpha), 1.0 - cos(2.0 * filterAlpha), -sin(2.0 * filterAlpha), -sin(filterAlpha)
-		};
-		prev_cutoffFreq = cutoffFreq;
-	}
+	static double prevSample = 0.0;
 
 	for (auto& n : vecNotes) {
 		bool bNoteFinished = false;
@@ -80,30 +67,12 @@ double MakeNoise(int nChannel, double dTime)
 			dSound = instEpicChoir.sound(dTime, n, bNoteFinished);
 
 
-		/*// Apply the low-pass filter
-		double filteredSound = 0.0;
-		for (size_t i = 0; i < sizeof(filterCoeff); i++) {
-			filteredSound += filterCoeff[i] * filterState[i];
-			if (i < sizeof(filterCoeff) - 1) {
-				filterState[i] = filterState[i + 1];
-			}
-		}
-		filterState[sizeof(filterCoeff) - 1] = dSound; // Update filter state with the new input
-		//dMixedOutput += filteredSound;*/
-
-		// Apply the high-pass filter (FIR)
-		double filteredSound = 0.0;
-		for (size_t i = 0; i < filterCoeff.size(); i++) {
-			filteredSound += filterCoeff[i] * filterState[i];
-			if (i < filterCoeff.size() - 1) {
-				filterState[i] = filterState[i + 1];
-			}
-		}
-		filterState[filterState.size() - 1] = dSound; // Update filter state with the new input
-		dMixedOutput += filteredSound;
+		// Apply the high-pass filter
+		dSound -= alpha * (dSound - prevSample);
+		prevSample = dSound;
 
 
-		//dMixedOutput += dSound;
+		dMixedOutput += dSound;
 
 		if (bNoteFinished && n.released > n.pressed)
 			n.active = false;
@@ -131,8 +100,8 @@ int main() {
 	sound.SetUserFunction(MakeNoise);
 
 	while (true) {
-		if (GetAsyncKeyState(VK_UP) & 1) cutoffFreq += 50;
-		if (GetAsyncKeyState(VK_DOWN) & 1) cutoffFreq -= 50;
+		if (GetAsyncKeyState(VK_UP) & 1) cutoffFreq += 10;
+		if (GetAsyncKeyState(VK_DOWN) & 1) cutoffFreq -= 10;
 
 		for (int i = 0; i < 5; i++) {
 			short nKeyState = GetAsyncKeyState((unsigned char)("ASDFE"[i]));
