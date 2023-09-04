@@ -1,5 +1,8 @@
 #include "synth.h"
 
+#include <api/fftw3.h>
+
+
 std::vector<synth::note> vecNotes;
 std::mutex muxNotes;
 
@@ -28,12 +31,39 @@ void safe_remove(T& v, lambda f)
 			++n;
 }
 
+// Filter coefficients (customize for your desired cutoff frequency)
+/*const std::vector<double> filterCoeff = {
+	-0.1, -0.2, 0.8, -0.2, -0.1, // First high-pass filter
+	0.2, 0.4, -1.6, 0.4, 0.2    // Second high-pass filter
+};*/
+
+double cutoffFreq = 100.0; // Customize as needed
+double prev_cutoffFreq = cutoffFreq;
+
+double filterAlpha = 2.0 * PI * cutoffFreq / 44100; // Calculate filterAlpha
+
+std::vector<double> filterCoeff = {
+	-sin(filterAlpha), -sin(2.0 * filterAlpha), 1.0 - cos(2.0 * filterAlpha), -sin(2.0 * filterAlpha), -sin(filterAlpha)
+};
+
+// Filter state variables
+std::vector<double> filterState(filterCoeff.size(), 0.0);
+
 // Function used by olcNoiseMaker to generate sound waves
 // Returns amplitude (-1.0 to +1.0) as a function of time
 double MakeNoise(int nChannel, double dTime)
 {
 	std::unique_lock<mutex> lm(muxNotes);
 	double dMixedOutput = 0.0;
+
+	if (cutoffFreq != prev_cutoffFreq) {
+		filterAlpha = 2.0 * PI * cutoffFreq / 44100; // Calculate filterAlpha
+
+		filterCoeff = {
+			-sin(filterAlpha), -sin(2.0 * filterAlpha), 1.0 - cos(2.0 * filterAlpha), -sin(2.0 * filterAlpha), -sin(filterAlpha)
+		};
+		prev_cutoffFreq = cutoffFreq;
+	}
 
 	for (auto& n : vecNotes) {
 		bool bNoteFinished = false;
@@ -49,7 +79,31 @@ double MakeNoise(int nChannel, double dTime)
 		if (n.id == 4)
 			dSound = instEpicChoir.sound(dTime, n, bNoteFinished);
 
-		dMixedOutput += dSound;
+
+		/*// Apply the low-pass filter
+		double filteredSound = 0.0;
+		for (size_t i = 0; i < sizeof(filterCoeff); i++) {
+			filteredSound += filterCoeff[i] * filterState[i];
+			if (i < sizeof(filterCoeff) - 1) {
+				filterState[i] = filterState[i + 1];
+			}
+		}
+		filterState[sizeof(filterCoeff) - 1] = dSound; // Update filter state with the new input
+		//dMixedOutput += filteredSound;*/
+
+		// Apply the high-pass filter (FIR)
+		double filteredSound = 0.0;
+		for (size_t i = 0; i < filterCoeff.size(); i++) {
+			filteredSound += filterCoeff[i] * filterState[i];
+			if (i < filterCoeff.size() - 1) {
+				filterState[i] = filterState[i + 1];
+			}
+		}
+		filterState[filterState.size() - 1] = dSound; // Update filter state with the new input
+		dMixedOutput += filteredSound;
+
+
+		//dMixedOutput += dSound;
 
 		if (bNoteFinished && n.released > n.pressed)
 			n.active = false;
@@ -60,6 +114,7 @@ double MakeNoise(int nChannel, double dTime)
 
 	return dMixedOutput * 0.2;
 }
+
 
 int main() {
 	// Get all sound hardware
@@ -76,6 +131,9 @@ int main() {
 	sound.SetUserFunction(MakeNoise);
 
 	while (true) {
+		if (GetAsyncKeyState(VK_UP) & 1) cutoffFreq += 50;
+		if (GetAsyncKeyState(VK_DOWN) & 1) cutoffFreq -= 50;
+
 		for (int i = 0; i < 5; i++) {
 			short nKeyState = GetAsyncKeyState((unsigned char)("ASDFE"[i]));
 			double dTimeNow = sound.GetTime();
@@ -110,7 +168,7 @@ int main() {
 			muxNotes.unlock();
 		}
 
-		wcout << "\rNotes: " << vecNotes.size() << "    ";
+		wcout << "\rNotes: " << vecNotes.size() << "          cut off frequency: " << cutoffFreq << "    ";
 	}
 
 
