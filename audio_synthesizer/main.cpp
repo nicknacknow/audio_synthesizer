@@ -4,6 +4,16 @@ std::vector<synth::note> vecNotes;
 std::mutex muxNotes;
 
 synth::instrument_harmonica instHarm;
+synth::instrument_synth1 instSynth1;
+synth::instrument_synth2 instSynth2;
+synth::instrument_synth3 instSynth3;
+
+synth::instrument_ethereal_pad instEtherealPad;
+synth::instrument_celestial_pad instCelestialPad;
+synth::instrument_classic_piano instClassicPiano;
+synth::instrument_epic_choir instEpicChoir;
+
+synth::instrument_analog_pad instAnalogPad;
 
 // thx olc :)
 typedef bool(*lambda)(synth::note const& item);
@@ -28,8 +38,17 @@ double MakeNoise(int nChannel, double dTime)
 	for (auto& n : vecNotes) {
 		bool bNoteFinished = false;
 		double dSound = 0;
-		if (n.channel == 1)
-			dSound = instHarm.sound(dTime, n, bNoteFinished) * 0.5;
+		if (n.id == 0)
+			dSound = instSynth1.sound(dTime, n, bNoteFinished);
+		if (n.id == 1)
+			dSound = instAnalogPad.sound(dTime, n, bNoteFinished);
+		if (n.id == 2)
+			dSound = instEtherealPad.sound(dTime, n, bNoteFinished);
+		if (n.id == 3)
+			dSound = instCelestialPad.sound(dTime, n, bNoteFinished);
+		if (n.id == 4)
+			dSound = instEpicChoir.sound(dTime, n, bNoteFinished);
+
 		dMixedOutput += dSound;
 
 		if (bNoteFinished && n.released > n.pressed)
@@ -57,8 +76,8 @@ int main() {
 	sound.SetUserFunction(MakeNoise);
 
 	while (true) {
-		for (int i = 0; i < 2; i++) {
-			short nKeyState = GetAsyncKeyState((unsigned char)("AS"[i]));
+		for (int i = 0; i < 5; i++) {
+			short nKeyState = GetAsyncKeyState((unsigned char)("ASDFE"[i]));
 			double dTimeNow = sound.GetTime();
 
 			muxNotes.lock();
@@ -109,5 +128,12 @@ to-do notes:
 
 
 
-	* make an echo thingy... should be simple
+	* make an echo thingy... should be simple .... i meant fade out here but echo would be cool too
+
+
+	* create struct / class where when key is held down a filter is applied to the instruments that are 'attached' to it
+		*	e.g. this can help with a fade-in 
+
+
+	!! for instruments, add a fixed duration for some. olc did this in part 4 so i can see how he did it there
 */
