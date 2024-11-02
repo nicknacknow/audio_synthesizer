@@ -1,0 +1,2 @@
+- found OneLoneCoders video series on this and sparked some passion into audio synthesising & audio modeling in general. 
+- i still use the skills gained with this project in music production (another interest of mine)
